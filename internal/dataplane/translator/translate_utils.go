@@ -3,7 +3,6 @@ package translator
 import (
 	"fmt"
 	"reflect"
-	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/kong/go-kong/kong"
@@ -97,43 +96,20 @@ func generateKongServiceFromBackendRefWithName(
 	// check if the service is already known, and if not create it
 	service, ok := rules.ServiceNameToServices[serviceName]
 	if !ok {
-		backendRequestTimeout := DefaultServiceTimeout
-
 		service = kongstate.Service{
 			Service: kong.Service{
 				Name:           kong.String(serviceName),
 				Host:           kong.String(serviceHost),
 				Protocol:       kong.String(protocol),
-				ConnectTimeout: kong.Int(backendRequestTimeout),
-				ReadTimeout:    kong.Int(backendRequestTimeout),
-				WriteTimeout:   kong.Int(backendRequestTimeout),
+				ConnectTimeout: kong.Int(DefaultServiceTimeout),
+				ReadTimeout:    kong.Int(DefaultServiceTimeout),
+				WriteTimeout:   kong.Int(DefaultServiceTimeout),
 				Retries:        kong.Int(DefaultRetries),
 			},
 			Namespace: route.GetNamespace(),
 			Backends:  backends,
 			Parent:    route,
 		}
-
-		resource, ok := route.(*gatewayapi.HTTPRoute)
-		if ok {
-			for _, rule := range resource.Spec.Rules {
-				if rule.Timeouts != nil && rule.Timeouts.BackendRequest != nil {
-					duration, err := time.ParseDuration(string(*rule.Timeouts.BackendRequest))
-					if err != nil {
-						continue
-					}
-					backendRequestTimeout = int(duration.Seconds() * 1000)
-				}
-			}
-			// TODO: Due to only one field being available in the Gateway API to control this behavior,
-			// when users set `spec.rules[].timeouts` in HTTPRoute,
-			// KIC will also set ReadTimeout, WriteTimeout and ConnectTimeout for the service to this value
-			// https://github.com/Kong/kubernetes-ingress-controller/issues/4914#issuecomment-1813964669
-			service.Service.ReadTimeout = kong.Int(backendRequestTimeout)
-			service.Service.ConnectTimeout = kong.Int(backendRequestTimeout)
-			service.Service.WriteTimeout = kong.Int(backendRequestTimeout)
-		}
-
 	}
 
 	// In the context of the gateway API conformance tests, if there is no service for the backend,

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/kong/go-kong/kong"
 	"github.com/samber/lo"
@@ -85,8 +86,37 @@ func (t *Translator) ingressRulesFromHTTPRoute(result *ingressRules, httproute *
 		// cache the service to avoid duplicates in further loop iterations
 		result.ServiceNameToServices[*service.Service.Name] = service
 		result.ServiceNameToParent[serviceName] = httproute
+
+		applyTimeoutsToService(httproute, result)
 	}
 	return nil
+}
+
+func applyTimeoutsToService(httpRoute *gatewayapi.HTTPRoute, rules *ingressRules) {
+	if httpRoute.Spec.Rules != nil {
+		backendRequestTimeout := DefaultServiceTimeout
+		for _, rule := range httpRoute.Spec.Rules {
+			if rule.Timeouts != nil && rule.Timeouts.BackendRequest != nil {
+				duration, err := time.ParseDuration(string(*rule.Timeouts.BackendRequest))
+				if err != nil {
+					continue
+				}
+				backendRequestTimeout = int(duration.Milliseconds())
+			}
+		}
+
+		for _, service := range rules.ServiceNameToServices {
+			if service.Parent == httpRoute {
+				// TODO: Due to only one field being available in the Gateway API to control this behavior,
+				// when users set `spec.rules[].timeouts` in HTTPRoute,
+				// KIC will also set ReadTimeout, WriteTimeout and ConnectTimeout for the service to this value
+				// https://github.com/Kong/kubernetes-ingress-controller/issues/4914#issuecomment-1813964669
+				service.Service.ReadTimeout = kong.Int(backendRequestTimeout)
+				service.Service.ConnectTimeout = kong.Int(backendRequestTimeout)
+				service.Service.WriteTimeout = kong.Int(backendRequestTimeout)
+			}
+		}
+	}
 }
 
 func validateHTTPRoute(httproute *gatewayapi.HTTPRoute, featureFlags FeatureFlags) error {
@@ -154,6 +184,8 @@ func (t *Translator) ingressRulesFromHTTPRoutesUsingExpressionRoutes(httpRoutes 
 				httproute,
 			)
 			continue
+		} else {
+			applyTimeoutsToService(httproute, result)
 		}
 		t.registerSuccessfullyTranslatedObject(httproute)
 	}
