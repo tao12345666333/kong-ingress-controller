@@ -1,4 +1,4 @@
-//go:build e2e_tests
+//go:build performance_tests
 
 package e2e
 
