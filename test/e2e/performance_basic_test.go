@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
+	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -23,7 +25,10 @@ import (
 	"github.com/kong/kubernetes-ingress-controller/v3/test/internal/helpers"
 )
 
-var defaultResNum = 10000
+var (
+	defaultResNum = 10000
+	resNumStr     = os.Getenv("PERF_RES_NUMBER")
+)
 
 // -----------------------------------------------------------------------------
 // E2E Performance tests
@@ -36,6 +41,12 @@ func TestBasicPerf(t *testing.T) {
 	t.Log("configuring all-in-one-dbless.yaml manifest test")
 	t.Parallel()
 	ctx, env := setupE2ETest(t)
+
+	if resNumStr != "" {
+		if num, err := strconv.Atoi(resNumStr); err == nil {
+			defaultResNum = num
+		}
+	}
 
 	t.Log("deploying kong components")
 	ManifestDeploy{Path: dblessPath}.Run(ctx, t, env)
