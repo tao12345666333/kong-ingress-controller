@@ -25,5 +25,6 @@ jobs:
         gh workflow run ${WORKFLOW} --ref ${BRANCH} \
           -f run-gke=false \
           -f run-istio=true \
+          -f run-performance=true \
           -f all-supported-k8s-versions=true \
           -f pr-number=${PR_NUMBER}
