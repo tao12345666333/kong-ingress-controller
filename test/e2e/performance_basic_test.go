@@ -13,12 +13,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kong/kubernetes-ingress-controller/v3/test"
-	"github.com/kong/kubernetes-ingress-controller/v3/test/internal/helpers"
 	"github.com/kong/kubernetes-testing-framework/pkg/utils/kubernetes/generators"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/kong/kubernetes-ingress-controller/v3/test"
+	"github.com/kong/kubernetes-ingress-controller/v3/test/internal/helpers"
 )
 
 // -----------------------------------------------------------------------------
@@ -129,6 +130,65 @@ spec:
 
 	t.Logf("time to apply 10000 ingress rules: %v", t2.Sub(t1))
 	t.Logf("time to make 10000 ingress rules take effect: %v", t4.Sub(t2))
+
+	updatedIngressTpl := `
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: test-ingress-%d
+spec:
+  ingressClassName: kong
+  rules:
+  - host: example-%d.com
+    http:
+      paths:
+      - backend:
+          service:
+            name: httpbin
+            port:
+              number: 80
+        path: /ip
+        pathType: Exact
+
+`
+	rand.Seed(time.Now().UnixNano())
+	randomInt := rand.Intn(10000)
+
+	updatedStartTime := time.Now()
+	cmd = exec.CommandContext(ctx, "kubectl", "--kubeconfig", kubeconfig, "apply", "-f", "-")
+	cmd.Stdin = strings.NewReader(fmt.Sprintf(updatedIngressTpl, randomInt, randomInt))
+	_, err = cmd.CombinedOutput()
+	require.NoError(t, err)
+	updatedEndTime := time.Now()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/ip", proxyURLForDefaultIngress), nil)
+	require.NoError(t, err)
+	req.Host = fmt.Sprintf("example-%d.com", randomInt)
+
+	require.Eventually(t, func() bool {
+		resp, err := helpers.DefaultHTTPClient().Do(req)
+		if err != nil {
+			t.Logf("WARNING: error while waiting for %s: %v", proxyURLForDefaultIngress, err)
+			return false
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			// now that the ingress backend is routable
+			b := new(bytes.Buffer)
+			n, err := b.ReadFrom(resp.Body)
+			require.NoError(t, err)
+			require.True(t, n > 0)
+			return strings.Contains(b.String(), "origin")
+		}
+		return false
+	}, ingressWait, time.Millisecond*500)
+
+	updatedEffectiveTime := time.Now()
+
+	t.Logf("time to apply 1 ingress rules when 10000 ingress exists: %v", updatedEndTime.Sub(updatedStartTime))
+	t.Logf("time to make 1 ingress rules take effect when 10000 ingress exists: %v", updatedEffectiveTime.Sub(updatedEndTime))
+
 }
 
 func getRandomList(n int) []int {
