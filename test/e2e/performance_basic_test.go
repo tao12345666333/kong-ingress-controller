@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"math/rand"
 	"net/http"
@@ -21,6 +22,8 @@ import (
 	"github.com/kong/kubernetes-ingress-controller/v3/test"
 	"github.com/kong/kubernetes-ingress-controller/v3/test/internal/helpers"
 )
+
+var defaultResNum = 10000
 
 // -----------------------------------------------------------------------------
 // E2E Performance tests
@@ -48,8 +51,8 @@ func TestBasicPerf(t *testing.T) {
 	_, err = env.Cluster().Client().CoreV1().Services("default").Create(ctx, service, metav1.CreateOptions{})
 	require.NoError(t, err)
 
-	// I want to to create a large YAML file,
-	// it includes 1000 ingress rules, every rule has a different host name and path.
+	kubeconfig := getTemporaryKubeconfig(t, env)
+
 	ingressTpl := `
 ---
 apiVersion: networking.k8s.io/v1
@@ -73,18 +76,14 @@ spec:
 `
 
 	ingressYaml := ""
-	for i := 0; i < 10000; i++ {
+	for i := 0; i < defaultResNum; i++ {
 		ingressYaml += fmt.Sprintf(ingressTpl, i, i)
 	}
 
-	t1 := time.Now()
-	// use kubectl apply the ingressYAML to kubernetes
-	kubeconfig := getTemporaryKubeconfig(t, env)
-	cmd := exec.CommandContext(ctx, "kubectl", "--kubeconfig", kubeconfig, "apply", "-f", "-")
-	cmd.Stdin = strings.NewReader(ingressYaml)
-	_, err = cmd.CombinedOutput()
+	startTime := time.Now()
+	err = applyResourceWithKubectl(ctx, t, kubeconfig, ingressYaml)
 	require.NoError(t, err)
-	t2 := time.Now()
+	completionTime := time.Now()
 
 	t.Log("getting kong proxy IP after LB provisioning")
 	proxyURLForDefaultIngress := "http://" + getKongProxyIP(ctx, t, env)
@@ -92,7 +91,7 @@ spec:
 	t.Log("waiting for routes from Ingress to be operational")
 
 	// create wait group to wait for all ingress rules to take effect
-	randomList := getRandomList(10000)
+	randomList := getRandomList(defaultResNum)
 	var wg sync.WaitGroup
 	wg.Add(len(randomList))
 
@@ -100,36 +99,18 @@ spec:
 		go func(i int) {
 			defer wg.Done()
 
-			req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/get", proxyURLForDefaultIngress), nil)
-			require.NoError(t, err)
-			req.Host = fmt.Sprintf("example-%d.com", i)
-
 			require.Eventually(t, func() bool {
-				resp, err := helpers.DefaultHTTPClient().Do(req)
-				if err != nil {
-					t.Logf("WARNING: error while waiting for %s: %v", proxyURLForDefaultIngress, err)
-					return false
-				}
-				defer resp.Body.Close()
-				if resp.StatusCode == http.StatusOK {
-					// now that the ingress backend is routable
-					b := new(bytes.Buffer)
-					n, err := b.ReadFrom(resp.Body)
-					require.NoError(t, err)
-					require.True(t, n > 0)
-					return strings.Contains(b.String(), "origin")
-				}
-				return false
+				return isRouteActive(ctx, t, helpers.DefaultHTTPClient(), proxyURLForDefaultIngress, "get", fmt.Sprintf("example-%d.com", i))
 			}, ingressWait, time.Millisecond*500)
 		}(i)
 	}
 
 	wg.Wait()
 
-	t4 := time.Now()
+	effectTime := time.Now()
 
-	t.Logf("time to apply 10000 ingress rules: %v", t2.Sub(t1))
-	t.Logf("time to make 10000 ingress rules take effect: %v", t4.Sub(t2))
+	t.Logf("time to apply %d ingress rules: %v", defaultResNum, completionTime.Sub(startTime))
+	t.Logf("time to make %d ingress rules take effect: %v", defaultResNum, effectTime.Sub(completionTime))
 
 	updatedIngressTpl := `
 ---
@@ -155,39 +136,19 @@ spec:
 	rand.Seed(time.Now().UnixNano())
 	randomInt := rand.Intn(10000)
 
-	updatedStartTime := time.Now()
-	cmd = exec.CommandContext(ctx, "kubectl", "--kubeconfig", kubeconfig, "apply", "-f", "-")
-	cmd.Stdin = strings.NewReader(fmt.Sprintf(updatedIngressTpl, randomInt, randomInt))
-	_, err = cmd.CombinedOutput()
+	startTime = time.Now()
+	err = applyResourceWithKubectl(ctx, t, kubeconfig, fmt.Sprintf(updatedIngressTpl, randomInt, randomInt))
 	require.NoError(t, err)
-	updatedEndTime := time.Now()
-
-	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/ip", proxyURLForDefaultIngress), nil)
-	require.NoError(t, err)
-	req.Host = fmt.Sprintf("example-%d.com", randomInt)
+	completionTime = time.Now()
 
 	require.Eventually(t, func() bool {
-		resp, err := helpers.DefaultHTTPClient().Do(req)
-		if err != nil {
-			t.Logf("WARNING: error while waiting for %s: %v", proxyURLForDefaultIngress, err)
-			return false
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode == http.StatusOK {
-			// now that the ingress backend is routable
-			b := new(bytes.Buffer)
-			n, err := b.ReadFrom(resp.Body)
-			require.NoError(t, err)
-			require.True(t, n > 0)
-			return strings.Contains(b.String(), "origin")
-		}
-		return false
+		return isRouteActive(ctx, t, helpers.DefaultHTTPClient(), proxyURLForDefaultIngress, "ip", fmt.Sprintf("example-%d.com", randomInt))
 	}, ingressWait, time.Millisecond*500)
 
-	updatedEffectiveTime := time.Now()
+	effectTime = time.Now()
 
-	t.Logf("time to apply 1 ingress rules when 10000 ingress exists: %v", updatedEndTime.Sub(updatedStartTime))
-	t.Logf("time to make 1 ingress rules take effect when 10000 ingress exists: %v", updatedEffectiveTime.Sub(updatedEndTime))
+	t.Logf("time to apply 1 ingress rules when %d ingress exists: %v", defaultResNum, completionTime.Sub(startTime))
+	t.Logf("time to make 1 ingress rules take effect when %d ingress exists: %v", defaultResNum, effectTime.Sub(completionTime))
 
 }
 
@@ -200,4 +161,33 @@ func getRandomList(n int) []int {
 	randPerm = append(randPerm, 0, n-1)
 
 	return randPerm
+}
+
+func isRouteActive(ctx context.Context, t *testing.T, client *http.Client, proxyIP, path, hostname string) bool {
+	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/%s", proxyIP, path), nil)
+	require.NoError(t, err)
+	req.Host = hostname
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Logf("WARNING: error while waiting for %s: %v", proxyIP, err)
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		// now that the ingress backend is routable
+		b := new(bytes.Buffer)
+		n, err := b.ReadFrom(resp.Body)
+		require.NoError(t, err)
+		require.True(t, n > 0)
+		return strings.Contains(b.String(), "origin")
+	}
+	return false
+}
+
+func applyResourceWithKubectl(ctx context.Context, t *testing.T, kubeconfig, resourceYAML string) error {
+	cmd := exec.CommandContext(ctx, "kubectl", "--kubeconfig", kubeconfig, "apply", "-f", "-")
+	cmd.Stdin = strings.NewReader(resourceYAML)
+	_, err := cmd.CombinedOutput()
+	return err
 }
