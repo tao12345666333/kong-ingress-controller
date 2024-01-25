@@ -36,7 +36,7 @@ on:
         type: boolean
         default: false
       res-number-for-perf:
-        description: The number of resource for performance tests (default: 10000)
+        description: The number of resource for performance tests
         type: string
         default: 10000
 
