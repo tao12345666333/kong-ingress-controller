@@ -1,4 +1,4 @@
-name: trigger e2e (targeted) on label
+name: trigger perf test (targeted) on label
 
 on:
   pull_request:
@@ -6,13 +6,13 @@ on:
     - labeled
 
 jobs:
-  trigger-e2e-tests-targeted:
-    if: contains(github.event.*.labels.*.name, 'ci/run-e2e')
+  trigger-performance-tests-targeted:
+    if: contains(github.event.*.labels.*.name, 'ci/run-performance')
 
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.K8S_TEAM_BOT_GH_PAT }}
-      WORKFLOW: .github/workflows/e2e_targeted.yaml
+      WORKFLOW: .github/workflows/performance_targeted.yaml
       BRANCH: ${{ github.event.pull_request.head.ref }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
 
@@ -23,7 +23,5 @@ jobs:
     # https://github.com/Kong/kubernetes-testing-framework/issues/587
     - run: |
         gh workflow run ${WORKFLOW} --ref ${BRANCH} \
-          -f run-gke=false \
-          -f run-istio=true \
-          -f all-supported-k8s-versions=true \
+          -f run-performance=true \
           -f pr-number=${PR_NUMBER}
